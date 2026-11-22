@@ -1,0 +1,10 @@
+# Secrets: only .example.env may be committed
+.env
+
+# Virtual environment
+.venv/
+
+# Python / pytest artifacts
+__pycache__/
+*.pyc
+.pytest_cache/
