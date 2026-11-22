@@ -1,0 +1,92 @@
+# EX2 - Application Layer Lab (Python 3.10+)
+
+A tiny client / proxy / server system over raw TCP sockets, using a JSON
+application-layer protocol **that you define** (`protocol.md`). Everything
+below the socket is a byte stream; message structure, framing, error format
+and caching semantics are your responsibility.
+
+This directory is the starting skeleton. You may change its structure or
+rewrite parts, as long as the assignment requirements are met. Every file
+marks what is **given** and what is a **TODO**.
+
+## Files
+
+| File | Given | You complete |
+|------|-------|--------------|
+| `server.py` | LRU cache, safe arithmetic evaluator (`ast`, no `eval`), GPT stub, request dispatch, accept loop | framing (`recv_line`), persistent connection + error handling, comparisons and `and/or/not` in the evaluator, how booleans are returned, optional real GPT call |
+| `client.py` | request builders, preset expressions, menu text, CLI parsing | framing, `Connection.request()` / `close()`, interactive loop over one connection |
+| `proxy.py` | CLI parsing, listening socket, thread per client, shape of the per-client loop | framing, cache key, cache + eviction policy, forwarding to the server, hit / miss / server-down logic |
+| `tests/test_smoke.py` | smoke tests for server and proxy | adjust if you rename things or change the boolean representation |
+| `requirements.txt` | optional deps (real GPT calls, pytest) | - |
+| `.example.env` | example of the API-key variable | copy to `.env` only if you use a real API; never submit `.env` |
+| `protocol.md` | **does not exist yet** | you write it (see below) |
+
+Search for `TODO` in the code - each one has a short explanation of what is
+expected and which questions to answer in `protocol.md`.
+
+## Quick start
+
+```bash
+pip install -r requirements.txt          # optional (GPT API / pytest)
+
+# terminal 1 - server
+python server.py --host 127.0.0.1 --port 5555 --cache-size 128
+
+# terminal 2 - one-shot client, directly against the server
+python client.py --host 127.0.0.1 --port 5555 --mode calc --expr "1+2*3"
+python client.py --host 127.0.0.1 --port 5555 --mode gpt  --prompt "count to 10"
+
+# interactive client (menu, many requests over ONE connection)
+python client.py --host 127.0.0.1 --port 5555
+```
+
+### With the proxy
+
+```bash
+# terminal 3 - proxy in front of the server
+python proxy.py --listen-port 5554 --server-port 5555 --cache-size 64
+
+# the client only changes the port
+python client.py --host 127.0.0.1 --port 5554 --mode calc --expr "sqrt(16)"
+python client.py --host 127.0.0.1 --port 5554
+```
+
+If your command-line interface ends up slightly different, update this README.
+
+## Tests
+
+```bash
+python -m pytest tests/        # or: python tests/test_smoke.py
+```
+
+The tests fail until the TODOs are done. They are a checklist, not a proof:
+the assignment asks for more than they check (e.g. scenario 3, where the
+server is shut down and the proxy keeps answering from its cache, must be
+done by hand and captured with Wireshark).
+
+## protocol.md - what it must contain
+
+* The message types (`calc`, `gpt`) and every field: name, type, meaning,
+  required / optional.
+* **Framing**: what marks the end of a message and why one `send()` is not one
+  `recv()`. The skeleton suggests one JSON object per line terminated by `\n`;
+  if you choose something else, change `send_json` / `recv_line` everywhere.
+* The exact shape of a success response and of an error response.
+* How a **boolean** calc result is returned (`1 < 2`, `not (3 > 4)` ...).
+* The proxy **cache key**: what makes two requests "the same", whether
+  `options` are part of it, what `options.cache = false` means.
+* The **eviction policy** of the proxy cache and how it works.
+* What the client receives when the proxy has a cache miss and the server is
+  down.
+* Any extra fields you added and why they are needed.
+
+## Deliverables (see the assignment PDF for the full list)
+
+* All code (client, server, proxy), including every change to the skeleton.
+* `protocol.md`.
+* This README, updated to match your implementation.
+* At least three `.pcapng` captures (server only / server + proxy / server shut down).
+* Your Dashboard project from assignment 1, extended to version 2.
+* A PDF with screenshots **and explanations**, cache hit / miss diagrams,
+  capture analysis, and the main AI prompts you used.
+* Never include `.env`, API keys, passwords or personal data in the ZIP.

@@ -1,0 +1,6 @@
+# Optional: only needed if you enable real GPT calls in server.call_gpt()
+python-dotenv>=1.0.1
+openai>=1.0.0
+
+# Optional: for running tests/test_smoke.py with `python -m pytest tests/`
+pytest>=8.0
