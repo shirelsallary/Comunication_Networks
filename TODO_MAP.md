@@ -201,7 +201,7 @@ In the last column, **yes** means the skeleton explicitly asks for the answer to
 ## Baseline test results
 
 - Date: 2026-11-22
-- Environment: Windows, Python 3.15.0, pytest 9.2.0
+- Environment: Windows, Python 3.10.22, pytest 9.2.0
 - Command: `python -m pytest tests/ -v`, using the interpreter in `.venv`
 - Result: **7 failed, 0 passed**, 7 warnings
 
