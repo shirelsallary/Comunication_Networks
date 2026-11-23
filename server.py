@@ -82,7 +82,7 @@ class LRUCache:
 
 
 # ======================================================================
-# Safe expression evaluation (GIVEN for arithmetic, TODO for booleans)
+# Safe expression evaluation - see protocol.md §6
 # ======================================================================
 # We never call eval(). The expression is parsed into an AST and only the
 # node types / operators / functions listed below are allowed. Anything
@@ -99,14 +99,13 @@ _ALLOWED_OPS = {
     ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
     ast.Div: operator.truediv, ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod,
     ast.Pow: operator.pow, ast.USub: operator.neg, ast.UAdd: operator.pos,
-    # TODO 3: `not x` is ast.UnaryOp(op=ast.Not(), operand=x). Where does it belong?
+    # `not` is a unary operator too; operator.not_ always returns a bool and treats zero as false - see protocol.md §6.3
+    ast.Not: operator.not_,
 }
 
-# TODO 3: comparison operators. The AST classes are ast.Lt, ast.LtE, ast.Eq,
-# ast.NotEq, ast.Gt, ast.GtE and the matching functions live in `operator`
-# (operator.lt, operator.le, ...). Fill this dict in.
 _ALLOWED_CMP_OPS: Dict[type, Any] = {
-    # ast.Lt: operator.lt,
+    ast.Lt: operator.lt, ast.LtE: operator.le, ast.Eq: operator.eq,
+    ast.NotEq: operator.ne, ast.Gt: operator.gt, ast.GtE: operator.ge,
 }
 
 
@@ -114,10 +113,10 @@ def _eval_node(node: ast.AST) -> Any:
     """Recursively evaluate a restricted AST node."""
     # --- numbers --------------------------------------------------------
     if isinstance(node, ast.Constant):
+        # bool is a subclass of int, so True / False pass here and are returned
+        # unchanged, as booleans - see protocol.md §6.3
         if isinstance(node.value, (int, float)):
             return node.value
-        # Note: bool is a subclass of int, so `True` / `False` literals pass the
-        # check above. Decide whether you want that and document it.
         raise ValueError("illegal constant type")
 
     # --- named constants (pi, e) ---------------------------------------
@@ -131,7 +130,13 @@ def _eval_node(node: ast.AST) -> Any:
         return _ALLOWED_OPS[type(node.op)](_eval_node(node.operand))
 
     if isinstance(node, ast.BinOp) and type(node.op) in _ALLOWED_OPS:
-        return _ALLOWED_OPS[type(node.op)](_eval_node(node.left), _eval_node(node.right))
+        left, right = _eval_node(node.left), _eval_node(node.right)
+        # Integer powers are computed exactly (9**9**9 has ~370 million digits), so
+        # refuse them before computing if the result would exceed 4300 digits - see protocol.md §6.5
+        if isinstance(node.op, ast.Pow) and isinstance(left, int) and isinstance(right, int) \
+                and abs(left) > 1 and right > 0 and right * math.log10(abs(left)) > 4300:
+            raise ValueError("result would exceed 4300 digits")
+        return _ALLOWED_OPS[type(node.op)](left, right)
 
     # --- function calls -------------------------------------------------
     if isinstance(node, ast.Call):
@@ -140,42 +145,52 @@ def _eval_node(node: ast.AST) -> Any:
         args = [_eval_node(a) for a in node.args]
         return _ALLOWED_FUNCS[node.func.id](*args)
 
-    # --- TODO 3: comparisons --------------------------------------------
-    # `1 < 2` is parsed into ast.Compare(left=1, ops=[Lt()], comparators=[2]).
-    # Python allows CHAINED comparisons: `1 < 2 < 3` is ONE Compare node with
-    # ops=[Lt(), Lt()] and comparators=[2, 3], meaning (1 < 2) and (2 < 3).
-    # Use _ALLOWED_CMP_OPS. Reject operators that are not in the dict.
+    # --- comparisons ----------------------------------------------------
+    # `1 < 2 < 3` is ONE Compare node with ops=[Lt(), Lt()] and comparators=[2, 3].
+    # A chain means (1 < 2) and (2 < 3), short-circuited like `and`: the first
+    # false link returns False without evaluating the rest - see protocol.md §6.3
     if isinstance(node, ast.Compare):
-        raise NotImplementedError("TODO 3: comparisons are not supported yet")
+        left = _eval_node(node.left)
+        for op, right_node in zip(node.ops, node.comparators):
+            if type(op) not in _ALLOWED_CMP_OPS:
+                raise ValueError("illegal comparison")
+            right = _eval_node(right_node)
+            if not _ALLOWED_CMP_OPS[type(op)](left, right):
+                return False
+            left = right
+        return True
 
-    # --- TODO 3: and / or -----------------------------------------------
-    # `a and b and c` is ONE ast.BoolOp(op=ast.And(), values=[a, b, c]).
-    # `a or b` is ast.BoolOp(op=ast.Or(), values=[a, b]).
-    # Decide (and document in protocol.md) whether you short-circuit like
-    # Python does, and what `1 and 2` should evaluate to.
+    # --- and / or --------------------------------------------------------
+    # all() / any() over a generator short-circuit and always return a bool,
+    # so `1 and 2` is True and `0 and 1/0` is False - see protocol.md §6.3
     if isinstance(node, ast.BoolOp):
-        raise NotImplementedError("TODO 3: and / or are not supported yet")
+        if isinstance(node.op, ast.And):
+            return all(_eval_node(v) for v in node.values)
+        return any(_eval_node(v) for v in node.values)
 
     raise ValueError("illegal expression")
 
 
 def safe_eval_expr(expr: str):
     """
-    Parse `expr` and evaluate it safely (no eval()).
+    Parse `expr` and evaluate it safely (no eval()) - see protocol.md §6.4 for the order.
+    `expr` is already stripped and non-empty (validate_request, protocol.md §3.5).
 
-    Raises SyntaxError (cannot parse) or ValueError (parsed, but not allowed)
-    - both are turned into an error response by handle_request().
-
-    TODO 4: the code below forces every result to float, so
-    `1 < 2` would come back as 1.0. Decide how a boolean result travels in
-    your protocol (JSON true/false? 1/0? a string?) and make sure calc
-    results of BOTH kinds are returned consistently. Document the choice.
-
-    Edge cases worth a thought (the spec cannot list them all): very long
-    expressions, `9**9**9`, division by zero, sqrt(-1), empty string ...
+    Returns the result in the type Python computes - int, float or bool, never
+    converted - so a logical result stays a JSON true / false (protocol.md §6.2).
+    Raises SyntaxError, ValueError or an arithmetic error; handle_request turns
+    them into BAD_EXPR.
     """
-    tree = ast.parse(expr, mode="eval")
-    return float(_eval_node(tree.body))
+    # Bounds the work per request - see protocol.md §6.5
+    if len(expr) > 1000:
+        raise ValueError("expression longer than 1000 characters")
+    result = _eval_node(ast.parse(expr, mode="eval").body)
+    # Only the final result is checked: it must fit in valid JSON - see protocol.md §6.5
+    if isinstance(result, complex) or (isinstance(result, float) and not math.isfinite(result)):
+        raise ValueError("result is not a finite real number")
+    if isinstance(result, int) and abs(result) >= 10 ** 4300:
+        raise ValueError("result exceeds 4300 digits")
+    return result
 
 
 # ======================================================================
@@ -226,10 +241,8 @@ def handle_request(msg: Dict[str, Any], cache: LRUCache) -> Dict[str, Any]:
         else:
             result = call_gpt(text)
         resp = {"ok": True, "result": result}
-    except NotImplementedError as e:
-        # Temporary: the evaluator still has stubs; this clause is removed in step 6 - see protocol.md §5
-        return make_error("INTERNAL_ERROR", f"Not implemented: {e}", int((time.time() - started) * 1000))
-    except (SyntaxError, ValueError, ZeroDivisionError, OverflowError, TypeError) as e:
+    # RecursionError: an expression nested too deeply for the evaluator - see protocol.md §6.5
+    except (SyntaxError, ValueError, ZeroDivisionError, OverflowError, TypeError, RecursionError) as e:
         resp = make_error("BAD_EXPR", f"Bad expression: {e}")
 
     resp["meta"] = make_meta(False, int((time.time() - started) * 1000))
