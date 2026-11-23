@@ -41,7 +41,7 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
-from common import make_error, make_meta, recv_line, send_json
+from common import cache_key, make_error, make_meta, recv_line, send_json, validate_request
 
 # ======================================================================
 # LRU cache (GIVEN)
@@ -201,51 +201,42 @@ def call_gpt(prompt: str) -> str:
 
 def handle_request(msg: Dict[str, Any], cache: LRUCache) -> Dict[str, Any]:
     """
-    Take ONE parsed request dict and return ONE response dict.
+    Take ONE parsed request and return ONE response dict.
     Pure application logic: no sockets here, which makes it easy to test.
+    Order: validate -> key -> lookup -> compute -> store (protocol.md §9.2-§9.4).
     """
-    if not isinstance(msg, dict):
-        return make_error("BAD_REQUEST", "Bad request: expected a JSON object")
-
-    mode = msg.get("mode")
-    data = msg.get("data") or {}
-    options = msg.get("options") or {}
-    use_cache = bool(options.get("cache", True))
-
     started = time.time()
-    # Note: this key includes `options` as well. Is that the right choice?
-    # (You will face the same question in proxy.py - document your answer.)
-    cache_key = json.dumps(msg, sort_keys=True)
+    error, mode, text, use_cache = validate_request(msg)
+    if error:
+        error["meta"]["took_ms"] = int((time.time() - started) * 1000)
+        return error
 
+    # Computed only after validation, so a malformed request never looks up the cache - see protocol.md §9.2
+    key = cache_key(mode, text)
+    # cache: false means no lookup and no store - see protocol.md §9.1
     if use_cache:
-        hit = cache.get(cache_key)
+        hit = cache.get(key)
         if hit is not None:
-            took = int((time.time() - started) * 1000)
-            return {"ok": True, "result": hit, "meta": make_meta(True, took)}
+            # The stored response may be a success or a BAD_EXPR; both come back marked as hits
+            return {**hit, "meta": make_meta(True, int((time.time() - started) * 1000))}
 
     try:
         if mode == "calc":
-            expr = data.get("expr")
-            if not expr or not isinstance(expr, str):
-                return make_error("BAD_REQUEST", "Bad request: 'expr' is required (string)")
-            result = safe_eval_expr(expr)
-        elif mode == "gpt":
-            prompt = data.get("prompt")
-            if not prompt or not isinstance(prompt, str):
-                return make_error("BAD_REQUEST", "Bad request: 'prompt' is required (string)")
-            result = call_gpt(prompt)
+            result = safe_eval_expr(text)
         else:
-            return make_error("UNKNOWN_MODE", f"Bad request: unknown mode {mode!r}")
+            result = call_gpt(text)
+        resp = {"ok": True, "result": result}
     except NotImplementedError as e:
         # Temporary: the evaluator still has stubs; this clause is removed in step 6 - see protocol.md §5
-        return make_error("INTERNAL_ERROR", f"Not implemented: {e}")
+        return make_error("INTERNAL_ERROR", f"Not implemented: {e}", int((time.time() - started) * 1000))
     except (SyntaxError, ValueError, ZeroDivisionError, OverflowError, TypeError) as e:
-        return make_error("BAD_EXPR", f"Bad expression: {e}")
+        resp = make_error("BAD_EXPR", f"Bad expression: {e}")
 
-    took = int((time.time() - started) * 1000)
+    resp["meta"] = make_meta(False, int((time.time() - started) * 1000))
+    # Successes and BAD_EXPR are deterministic, so both are cached as full responses - see protocol.md §9.3
     if use_cache:
-        cache.set(cache_key, result)
-    return {"ok": True, "result": result, "meta": make_meta(False, took)}
+        cache.set(key, resp)
+    return resp
 
 
 # ======================================================================

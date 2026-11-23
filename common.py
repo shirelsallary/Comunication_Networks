@@ -50,6 +50,55 @@ def recv_line(sock: socket.socket, buf: bytes) -> Tuple[Optional[bytes], bytes]:
         buf += chunk
 
 
+def validate_request(msg: Any) -> Tuple[Optional[Dict[str, Any]], Optional[str], Optional[str], Optional[bool]]:
+    """
+    Structural validation: steps 4-10 of protocol.md §3.4, in that order; the
+    first failing check decides the error. Return (error, mode, text, use_cache):
+        valid request   - error is None, text is the stripped expr / prompt (§3.5)
+                          and use_cache applies the per-mode default (§3.3)
+        invalid request - error is the ready error response, the rest are None
+    """
+    # Step 4
+    if not isinstance(msg, dict):
+        return make_error("BAD_REQUEST", "request must be a JSON object"), None, None, None
+    # Step 5: an unknown field is a sent value, so it is rejected, not ignored - see protocol.md §3.4
+    for name in msg:
+        if name not in ("mode", "data", "options"):
+            return make_error("BAD_REQUEST", f"unknown field {name!r}"), None, None, None
+    # Step 6
+    mode = msg.get("mode")
+    if not isinstance(mode, str):
+        return make_error("BAD_REQUEST", "'mode' is required (string)"), None, None, None
+    # Step 7
+    if mode not in ("calc", "gpt"):
+        return make_error("UNKNOWN_MODE", f"unknown mode {mode!r}"), None, None, None
+    # Step 8: data holds exactly one string field, chosen by mode - see protocol.md §3.2
+    field = "expr" if mode == "calc" else "prompt"
+    data = msg.get("data")
+    if not isinstance(data, dict) or list(data) != [field] or not isinstance(data[field], str):
+        return make_error("BAD_REQUEST", f"'data' must contain exactly one string field {field!r}"), None, None, None
+    # Step 9: options may be absent, but a sent value must have the right type (null does not) - see protocol.md §3.4
+    options = msg.get("options", {})
+    if not isinstance(options, dict) or any(name != "cache" for name in options) \
+            or not isinstance(options.get("cache", False), bool):
+        return make_error("BAD_REQUEST", "'options' may only contain a boolean 'cache'"), None, None, None
+    # Step 10: surrounding whitespace has no meaning; empty after stripping means missing - see protocol.md §3.5
+    text = data[field].strip()
+    if not text:
+        return make_error("BAD_REQUEST", f"{field!r} must not be empty"), None, None, None
+    # Default cache depends on mode - see protocol.md §3.3
+    use_cache = options.get("cache", mode == "calc")
+    return None, mode, text, use_cache
+
+
+def cache_key(mode: str, text: str) -> Tuple[str, str]:
+    """
+    Cache key shared by the server and the proxy - see protocol.md §9.2.
+    `text` is the stripped expr / prompt; `options` are deliberately not part of it.
+    """
+    return (mode, text)
+
+
 def make_meta(from_cache: bool, took_ms: int) -> Dict[str, Any]:
     """Build the `meta` object that every response carries - see protocol.md §4.3."""
     return {"from_cache": from_cache, "took_ms": took_ms}
