@@ -10,19 +10,23 @@ The server accepts TCP connections, reads application-layer messages
 and answers each one with a single JSON response. Two request types must
 be supported: mode="calc" and mode="gpt" (see your protocol.md).
 
+The protocol is defined in protocol.md; comments reference its sections (§).
+
 What is GIVEN (you may keep, change or rewrite it - just keep the requirements):
     LRUCache        - small LRU cache based on OrderedDict (server-side cache).
     safe_eval_expr  - safe ARITHMETIC evaluation using the `ast` module. No eval()!
     call_gpt        - stub that answers without any API key.
     handle_request  - validates a parsed request dict and dispatches to calc / gpt.
-    send_json       - serialises a response dict and writes it to the socket.
     serve           - accept loop, one thread per client connection.
 
-What YOU must complete (search the file for "TODO"):
-    TODO 1  recv_line()      framing: read ONE complete message from the byte stream.
-    TODO 2  handle_client()  persistent connection + error handling.
-    TODO 3  _eval_node()     comparisons (< <= == != > >=) and and / or / not.
-    TODO 4  safe_eval_expr() decide how a boolean result is returned (document it!).
+Completed (TODO 1-4):
+    recv_line / send_json  framing, in common.py (shared with the proxy) - §2
+    handle_client()        persistent connection + error handling - §8
+    _eval_node()           comparisons and and / or / not - §6.3
+    safe_eval_expr()       results without conversion (booleans stay JSON true / false), limits - §6.2, §6.5
+    handle_request()       validation, error codes, server cache - §3.4, §5, §9
+
+Still open:
     TODO 5  (optional) call_gpt() - talk to a real model. Key goes in .env, NEVER in git/ZIP.
 
 Enabling real GPT calls (optional):
@@ -235,17 +239,23 @@ def handle_request(msg: Dict[str, Any], cache: LRUCache) -> Dict[str, Any]:
             # The stored response may be a success or a BAD_EXPR; both come back marked as hits
             return {**hit, "meta": make_meta(True, int((time.time() - started) * 1000))}
 
-    try:
-        if mode == "calc":
-            result = safe_eval_expr(text)
-        else:
-            result = call_gpt(text)
-        resp = {"ok": True, "result": result}
-    # RecursionError: an expression nested too deeply for the evaluator - see protocol.md §6.5
-    except (SyntaxError, ValueError, ZeroDivisionError, OverflowError, TypeError, RecursionError) as e:
-        resp = make_error("BAD_EXPR", f"Bad expression: {e}")
+    if mode == "calc":
+        try:
+            resp = {"ok": True, "result": safe_eval_expr(text)}
+        # RecursionError: an expression nested too deeply for the evaluator - see protocol.md §6.5
+        except (SyntaxError, ValueError, ZeroDivisionError, OverflowError, TypeError, RecursionError) as e:
+            resp = make_error("BAD_EXPR", f"Bad expression: {e}")
+    else:
+        try:
+            resp = {"ok": True, "result": call_gpt(text)}
+        except Exception as e:
+            # A GPT failure is transient, so it is returned without being cached - see protocol.md §7, §9.3
+            return make_error("GPT_ERROR", f"GPT failed: {e}", int((time.time() - started) * 1000))
 
     resp["meta"] = make_meta(False, int((time.time() - started) * 1000))
+    # The server never sends a message the receiver would reject (over 64 KiB) - see protocol.md §7
+    if mode == "gpt" and len(json.dumps(resp, ensure_ascii=False).encode("utf-8")) > 65536:
+        return make_error("GPT_ERROR", "response too large", resp["meta"]["took_ms"])
     # Successes and BAD_EXPR are deterministic, so both are cached as full responses - see protocol.md §9.3
     if use_cache:
         cache.set(key, resp)
@@ -253,7 +263,7 @@ def handle_request(msg: Dict[str, Any], cache: LRUCache) -> Dict[str, Any]:
 
 
 # ======================================================================
-# Framing and per-connection loop (TODO 2)
+# Framing and per-connection loop
 # ======================================================================
 # send_json / recv_line live in common.py: the proxy uses the same framing.
 
