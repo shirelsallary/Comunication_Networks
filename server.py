@@ -41,6 +41,8 @@ import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
+from common import make_error, make_meta
+
 # ======================================================================
 # LRU cache (GIVEN)
 # ======================================================================
@@ -194,9 +196,7 @@ def call_gpt(prompt: str) -> str:
 # ======================================================================
 # Request handling (GIVEN - adjust if you change the protocol)
 # ======================================================================
-def make_error(message: str) -> Dict[str, Any]:
-    """Build an error response. Keep the shape consistent with protocol.md."""
-    return {"ok": False, "error": message}
+# make_error / make_meta live in common.py: the proxy builds the same responses.
 
 
 def handle_request(msg: Dict[str, Any], cache: LRUCache) -> Dict[str, Any]:
@@ -205,7 +205,7 @@ def handle_request(msg: Dict[str, Any], cache: LRUCache) -> Dict[str, Any]:
     Pure application logic: no sockets here, which makes it easy to test.
     """
     if not isinstance(msg, dict):
-        return make_error("Bad request: expected a JSON object")
+        return make_error("BAD_REQUEST", "Bad request: expected a JSON object")
 
     mode = msg.get("mode")
     data = msg.get("data") or {}
@@ -221,30 +221,31 @@ def handle_request(msg: Dict[str, Any], cache: LRUCache) -> Dict[str, Any]:
         hit = cache.get(cache_key)
         if hit is not None:
             took = int((time.time() - started) * 1000)
-            return {"ok": True, "result": hit, "meta": {"from_cache": True, "took_ms": took}}
+            return {"ok": True, "result": hit, "meta": make_meta(True, took)}
 
     try:
         if mode == "calc":
             expr = data.get("expr")
             if not expr or not isinstance(expr, str):
-                return make_error("Bad request: 'expr' is required (string)")
+                return make_error("BAD_REQUEST", "Bad request: 'expr' is required (string)")
             result = safe_eval_expr(expr)
         elif mode == "gpt":
             prompt = data.get("prompt")
             if not prompt or not isinstance(prompt, str):
-                return make_error("Bad request: 'prompt' is required (string)")
+                return make_error("BAD_REQUEST", "Bad request: 'prompt' is required (string)")
             result = call_gpt(prompt)
         else:
-            return make_error(f"Bad request: unknown mode {mode!r}")
+            return make_error("UNKNOWN_MODE", f"Bad request: unknown mode {mode!r}")
     except NotImplementedError as e:
-        return make_error(f"Not implemented: {e}")
+        # Temporary: the evaluator still has stubs; this clause is removed in step 6 - see protocol.md §5
+        return make_error("INTERNAL_ERROR", f"Not implemented: {e}")
     except (SyntaxError, ValueError, ZeroDivisionError, OverflowError, TypeError) as e:
-        return make_error(f"Bad expression: {e}")
+        return make_error("BAD_EXPR", f"Bad expression: {e}")
 
     took = int((time.time() - started) * 1000)
     if use_cache:
         cache.set(cache_key, result)
-    return {"ok": True, "result": result, "meta": {"from_cache": False, "took_ms": took}}
+    return {"ok": True, "result": result, "meta": make_meta(False, took)}
 
 
 # ======================================================================
