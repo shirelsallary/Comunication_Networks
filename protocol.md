@@ -302,6 +302,9 @@ type, so returning `3` in one case and `3.5` in another is not an inconsistency.
 - In arithmetic and comparisons, `True` counts as `1` and `False` as `0`, as in Python.
 - Only Python spelling is accepted: `True` / `False`. `true` returns `BAD_EXPR`.
 
+**Why:** a logical operator that returned a number would contradict §6.2, where a logical
+result is `true` or `false`.
+
 ### §6.4 Order of processing
 
 1. Strip surrounding whitespace; empty result gives `BAD_REQUEST` (§3.5).
@@ -379,7 +382,8 @@ the connection.
 
 **Why close:** requests carry no identifier, so the only way to match a response to its
 request is order. After a timeout, the late response may still arrive and would be taken as
-the answer to the next request. A new connection restores synchronization.
+the answer to the next request. A new connection restores synchronization. This matches
+common HTTP/1.1 client behavior.
 
 ### §8.7 Client receives a line that is not JSON
 
@@ -417,6 +421,9 @@ Both the server and the proxy have a cache, and both follow the rules below.
 
 `"cache": false` means the request does not touch any cache: neither the proxy's nor the
 server's cache is looked up, and the response is stored in neither.
+
+**Why not store:** otherwise every `gpt` answer (default `false`) would be cached without
+anyone asking.
 
 ### §9.2 Cache key
 
