@@ -256,33 +256,52 @@ def handle_request(msg: Dict[str, Any], cache: LRUCache) -> Dict[str, Any]:
 
 def handle_client(conn: socket.socket, addr, cache: LRUCache) -> None:
     """
-    Serve ONE client for the whole lifetime of its connection.
+    Serve ONE client for the whole lifetime of its connection - see protocol.md §8.
 
-    TODO 2: make this loop persistent and robust. Requirements:
-        * keep serving requests on the same socket until the client
-          disconnects (recv_line returns None) - do NOT close after one request
-        * malformed JSON  -> send a well-formed error response
-                             (decide: keep the connection open or close it?)
-        * unknown mode / bad expression -> handle_request() already returns an
-                             error dict, just send it
-        * disconnect in the middle of a message / socket errors -> never crash
-                             the thread, log something useful, clean up
-        * every request that reaches the server gets EXACTLY one response
+    The connection stays open after every response. It is closed only when the
+    client sends FIN, disconnects in the middle of a message, or sends a message
+    over 64 KiB. Every complete request gets exactly one response.
     """
     print(f"[server] + connection from {addr}")
     buf = b""
     with conn:
-        while True:
-            line, buf = recv_line(conn, buf)
-            if line is None:
-                break  # client closed the connection
+        try:
+            while True:
+                try:
+                    line, buf = recv_line(conn, buf)
+                except ValueError as e:
+                    # The newline never arrived, so the stream is out of sync: answer and close - see protocol.md §2.3
+                    send_json(conn, make_error("MESSAGE_TOO_LARGE", str(e)))
+                    break
+                if line is None:
+                    if buf:
+                        # A partial message followed by FIN can never be completed - see protocol.md §8.3
+                        print(f"[server] {addr} disconnected mid-message, discarded {len(buf)} bytes")
+                    break
 
-            # TODO 2: json.loads() raises json.JSONDecodeError / UnicodeDecodeError
-            # on bad input. Catch it and reply with make_error(...).
-            msg = json.loads(line.decode("utf-8"))
+                # A bad line keeps the connection open: the "\n" bounds it - see protocol.md §8.2
+                try:
+                    text = line.decode("utf-8")
+                except UnicodeDecodeError:
+                    send_json(conn, make_error("BAD_ENCODING", "request is not valid UTF-8"))
+                    continue
+                try:
+                    msg = json.loads(text)
+                except (json.JSONDecodeError, RecursionError):
+                    # RecursionError: JSON nested too deeply for Python's parser
+                    send_json(conn, make_error("BAD_JSON", "request is not valid JSON"))
+                    continue
 
-            resp = handle_request(msg, cache)
-            send_json(conn, resp)
+                try:
+                    resp = handle_request(msg, cache)
+                except Exception as e:
+                    # Safety net: a bug must not kill the thread or skip the response - see protocol.md §5
+                    print(f"[server] internal error for {addr}: {e!r}")
+                    resp = make_error("INTERNAL_ERROR", "unexpected server error")
+                send_json(conn, resp)
+        except OSError as e:
+            # Reset or another socket failure: log and clean up, never crash - see protocol.md §8.5
+            print(f"[server] socket error with {addr}: {e}")
     print(f"[server] - connection from {addr} closed")
 
 

@@ -16,6 +16,7 @@ here - it needs a real shutdown; do it by hand and capture it with Wireshark.
 """
 import json
 import os
+import socket
 import sys
 import threading
 import time
@@ -23,6 +24,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import client   # noqa: E402
+import common   # noqa: E402
 import proxy    # noqa: E402
 import server   # noqa: E402
 
@@ -64,6 +66,21 @@ def test_persistent_connection_and_server_cache():
     assert r1["ok"] and abs(r1["result"]) < 1e-9
     assert r2["ok"] and r2["meta"]["from_cache"] is True
     assert r3["ok"] and abs(r3["result"] - 1.0) < 1e-9
+
+
+def test_many_requests_on_one_connection():
+    """Assignment section 3: the server keeps serving requests on the SAME socket
+    until the client closes it (protocol.md §8.1). Uses a raw socket, so it does
+    not depend on the client implementation."""
+    _start_system_once()
+    with socket.create_connection((HOST, SERVER_PORT), timeout=5) as s:
+        buf = b""
+        for expr, expected in [("1+2", 3), ("2*5", 10), ("7-4", 3)]:
+            common.send_json(s, {"mode": "calc", "data": {"expr": expr}})
+            line, buf = common.recv_line(s, buf)
+            assert line is not None, "server closed the connection after a response"
+            r = json.loads(line)
+            assert r["ok"] is True and abs(r["result"] - expected) < 1e-9
 
 
 def test_boolean_expression():
