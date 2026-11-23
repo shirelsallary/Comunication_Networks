@@ -39,9 +39,9 @@ import operator
 import socket
 import threading
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
-from common import make_error, make_meta
+from common import make_error, make_meta, recv_line, send_json
 
 # ======================================================================
 # LRU cache (GIVEN)
@@ -249,39 +249,9 @@ def handle_request(msg: Dict[str, Any], cache: LRUCache) -> Dict[str, Any]:
 
 
 # ======================================================================
-# Framing (TODO 1) and per-connection loop (TODO 2)
+# Framing and per-connection loop (TODO 2)
 # ======================================================================
-def send_json(conn: socket.socket, obj: Dict[str, Any]) -> None:
-    """
-    Serialise `obj` and write it as ONE message.
-    The skeleton frames messages with a trailing "\\n" (json.dumps never emits a
-    raw newline, so the delimiter cannot appear inside a message). If you choose a
-    different framing (e.g. a length prefix) change send_json() AND recv_line()
-    consistently in server.py, client.py and proxy.py.
-    """
-    conn.sendall((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
-
-
-def recv_line(conn: socket.socket, buf: bytes) -> Tuple[Optional[bytes], bytes]:
-    """
-    Framing helper. Return (line, leftover):
-        line     - ONE complete message WITHOUT the trailing b"\\n",
-                   or None if the peer closed the connection before a full
-                   message arrived.
-        leftover - bytes already received that belong to the NEXT message(s).
-                   The caller must pass them back in as `buf` on the next call.
-
-    Why: TCP is a byte stream. One recv() may return half a message, exactly
-    one message, or one-and-a-half messages (try sending two requests quickly
-    and look at the capture). Never assume one send() == one recv().
-
-    TODO 1: implement.
-        * loop: if buf already contains b"\\n" -> split and return
-        * otherwise recv() more; b"" means the peer closed the connection
-        * think: what should happen when the peer closes while buf is NOT
-          empty (disconnect in the middle of a message)?
-    """
-    raise NotImplementedError("TODO 1: implement framing in recv_line()")
+# send_json / recv_line live in common.py: the proxy uses the same framing.
 
 
 def handle_client(conn: socket.socket, addr, cache: LRUCache) -> None:
