@@ -1,6 +1,6 @@
 # proxy.py
 """
-EX2 - Caching proxy (student skeleton)
+EX2 - Caching proxy
 
         client  <--TCP-->  proxy  <--TCP-->  server
 
@@ -19,16 +19,18 @@ a cache. The proxy must therefore:
     4. on a MISS forward the request to the server, store the answer, reply,
     5. keep working (for cached requests!) when the server is down.
 
+The protocol is defined in protocol.md; comments reference its sections (§).
+
 What is GIVEN:
     argument parsing, the listening socket, one thread per client connection,
     the overall shape of handle_client().
 
-What YOU must complete (search for "TODO"):
-    TODO 1  recv_line()          framing - same contract as in server.py
-    TODO 2  cache_key()          what makes two requests "the same request"?
-    TODO 3  ProxyCache           storage + eviction policy (LRU or another, explain it)
-    TODO 4  forward_to_server()  one request to the real server, one response back
-    TODO 5  handle_client()      hit / miss / server-down logic, many requests per connection
+Completed (TODO 1-5):
+    recv_line / send_json, cache_key  in common.py, shared with the server - §2, §9.2
+    ProxyCache           the server's LRUCache plus hits / misses / bypassed counters - §9.4
+    forward_to_server()  new TCP connection per forwarded request, original line - §10.3-§10.5
+    handle_request()     validate, bypass / hit / miss, SERVER_UNAVAILABLE - §10.1, §10.2
+    handle_client()      persistent connection + error handling, proxy_cache and took_ms - §8, §10.6
 """
 import argparse
 import json
@@ -85,60 +87,157 @@ class ProxyCache(LRUCache):
 
 
 # ======================================================================
-# Upstream (TODO 4)
+# Upstream - see protocol.md §10.3-§10.5
 # ======================================================================
 def forward_to_server(server_host: str, server_port: int,
-                      request: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+                      request: bytes) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
-    Send ONE request to the real server and return its ONE response dict.
-    Return None if the server cannot be reached or disconnects before answering.
+    Send ONE request to the real server and return (response, None), or
+    (None, reason) when no valid response was obtained (protocol.md §10.5).
 
-    TODO 4:
-        * The assignment lets you choose: open a fresh TCP connection to the
-          server for every forwarded request (simple), or keep one persistent
-          upstream connection per client (fewer handshakes - compare the two in
-          Wireshark!). Either way, document the choice.
-        * ConnectionRefusedError / socket.timeout / peer closed -> return None,
-          never let the exception kill the client thread.
+    `request` is the client's original line without the "\\n"; it is forwarded
+    byte for byte, so both legs of a capture show the same payload (§10.4).
+
+    Every call opens a NEW TCP connection and closes it after the response
+    (§10.3): each miss is a separate connection in Wireshark, a hit opens none,
+    and a restarted server works on the next request with no state to repair.
     """
-    raise NotImplementedError("TODO 4: implement forward_to_server()")
+    # Short connect timeout: a stopped server is detected quickly - see protocol.md §8.9
+    try:
+        sock = socket.create_connection((server_host, server_port), timeout=3)
+    except ConnectionRefusedError:
+        return None, "connection refused"
+    except socket.timeout:
+        return None, "connect timeout (3 s)"
+    except OSError as e:
+        return None, f"cannot connect: {e}"
+
+    # close() at the end of the block sends our FIN - nothing is left unread
+    with sock:
+        try:
+            # Long read timeout: a slow but working server has time to answer,
+            # and 3 + 25 s is still below the client's 30 s - see protocol.md §8.9
+            sock.settimeout(25)
+            sock.sendall(request + b"\n")
+            line, _ = recv_line(sock, b"")
+        except socket.timeout:
+            return None, "read timeout (25 s)"
+        except ValueError:
+            return None, "response larger than 65536 bytes"
+        except OSError as e:
+            return None, f"socket error: {e}"
+
+    if line is None:
+        return None, "server closed the connection before responding"
+    try:
+        response = json.loads(line.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        return None, "response is not valid JSON"
+    if not isinstance(response, dict):
+        return None, "response is not a JSON object"
+    return response, None
 
 
 # ======================================================================
-# Per-client loop (TODO 5)
+# Request handling - see protocol.md §10.1
+# ======================================================================
+def handle_request(line: bytes, msg: Any, cache: ProxyCache,
+                   server_host: str, server_port: int) -> Tuple[Dict[str, Any], bool, str]:
+    """
+    Take ONE parsed request and return (response, proxy_cache, log_text).
+    The response is returned without the proxy's meta fields; handle_client adds them.
+    """
+    # Same validation as the server: a malformed request gets its real error
+    # even while the server is down - see protocol.md §10.2
+    error, mode, text, use_cache = validate_request(msg)
+    if error:
+        return error, False, f"invalid ({error['error']['code']})"
+
+    key = cache_key(mode, text)
+    if not use_cache:
+        # cache: false - no lookup and no store - see protocol.md §9.1
+        cache.count_bypass()
+        label = "BYPASS"
+        response, reason = forward_to_server(server_host, server_port, line)
+    else:
+        hit = cache.get(key)
+        if hit is not None:
+            # The server is not contacted at all
+            return hit, True, f"HIT {key}"
+        label = "MISS"
+        response, reason = forward_to_server(server_host, server_port, line)
+        # Only successes and BAD_EXPR have a fixed outcome; the full response is
+        # stored - see protocol.md §9.3
+        if response is not None and (response["ok"] or response["error"]["code"] == "BAD_EXPR"):
+            cache.put(key, response)
+
+    if response is None:
+        what = "cache bypassed" if label == "BYPASS" else "cache miss"
+        message = f"{what} and no valid response from the server: {reason}"
+        return make_error("SERVER_UNAVAILABLE", message), False, f"{label} {key} -> SERVER_UNAVAILABLE ({reason})"
+    return response, False, f"{label} {key}"
+
+
+def with_proxy_meta(response: Dict[str, Any], proxy_cache: bool, started: float) -> Dict[str, Any]:
+    """
+    Return a COPY of `response` with the proxy's took_ms and proxy_cache - see
+    protocol.md §10.6. A copy, so a cached entry is never changed. The server's
+    from_cache is kept, so each layer has its own flag.
+    """
+    meta = {**response["meta"], "took_ms": int((time.time() - started) * 1000), "proxy_cache": proxy_cache}
+    return {**response, "meta": meta}
+
+
+# ======================================================================
+# Per-client loop - see protocol.md §8
 # ======================================================================
 def handle_client(conn: socket.socket, addr, cache: ProxyCache,
                   server_host: str, server_port: int) -> None:
     """
-    Serve ONE client connection: many requests, one response each.
-
-    TODO 5: for every complete line received from the client:
-        a. parse it as JSON. If it is not valid JSON, decide: answer with an
-           error yourself, or forward it and let the server decide? (document)
-        b. key = cache_key(req)   -> HIT:  send the stored response and `continue`
-                                            (the server is not contacted at all -
-                                            this is what scenario 2 must show)
-        c. MISS: resp = forward_to_server(...)
-             - None (server down)  -> send a well-formed error response to the
-                                      client (scenario 3) - do not hang, do not crash
-             - otherwise           -> store it (should ok=false responses be
-                                      cached?), then send it to the client
-        d. Think about what the client should SEE: the stored response says
-           "from_cache": false from the server's point of view. Should the
-           proxy mark its own hits (e.g. an extra meta field)? That makes your
-           Wireshark explanation much easier.
+    Serve ONE client connection: many requests, one response each (protocol.md §8.1).
+    Same robustness as the server: a bad line keeps the connection open, an
+    oversized message closes it, and socket errors never crash the thread.
     """
     print(f"[proxy] + connection from {addr}")
     buf = b""
     with conn:
-        while True:
-            line, buf = recv_line(conn, buf)
-            if line is None:
-                break
+        try:
+            while True:
+                try:
+                    line, buf = recv_line(conn, buf)
+                except ValueError as e:
+                    # The newline never arrived, so the stream is out of sync: answer and close - see protocol.md §2.3
+                    send_json(conn, with_proxy_meta(make_error("MESSAGE_TOO_LARGE", str(e)), False, time.time()))
+                    break
+                if line is None:
+                    if buf:
+                        # A partial message followed by FIN can never be completed - see protocol.md §8.3
+                        print(f"[proxy] {addr} disconnected mid-message, discarded {len(buf)} bytes")
+                    break
+                started = time.time()
 
-            # TODO 5: parse, cache lookup, forward on miss, answer the client.
-            raise NotImplementedError("TODO 5: implement the proxy logic")
-    print(f"[proxy] - connection from {addr} closed  (hits={cache.hits}, misses={cache.misses})")
+                # A bad line keeps the connection open: the "\n" bounds it - see protocol.md §8.2
+                try:
+                    msg = json.loads(line.decode("utf-8"))
+                except UnicodeDecodeError:
+                    response, proxy_cache, log = make_error("BAD_ENCODING", "request is not valid UTF-8"), False, "invalid (BAD_ENCODING)"
+                except (json.JSONDecodeError, RecursionError):
+                    # RecursionError: JSON nested too deeply for Python's parser
+                    response, proxy_cache, log = make_error("BAD_JSON", "request is not valid JSON"), False, "invalid (BAD_JSON)"
+                else:
+                    try:
+                        response, proxy_cache, log = handle_request(line, msg, cache, server_host, server_port)
+                    except Exception as e:
+                        # Safety net: a bug must not kill the thread or skip the response - see protocol.md §5
+                        response, proxy_cache, log = make_error("INTERNAL_ERROR", "unexpected proxy error"), False, f"INTERNAL_ERROR {e!r}"
+
+                # Every response sent by the proxy carries proxy_cache - see protocol.md §10.6
+                send_json(conn, with_proxy_meta(response, proxy_cache, started))
+                print(f"[proxy] {addr} {log}  ({cache.counters()})")
+        except OSError as e:
+            # Reset or another socket failure: log and clean up, never crash - see protocol.md §8.5
+            print(f"[proxy] socket error with {addr}: {e}")
+    print(f"[proxy] - connection from {addr} closed  ({cache.counters()})")
 
 
 # ======================================================================
@@ -159,7 +258,7 @@ def serve(listen_host: str, listen_port: int, server_host: str, server_port: int
                                  args=(conn, addr, cache, server_host, server_port),
                                  daemon=True).start()
         except KeyboardInterrupt:
-            print(f"\n[proxy] shutting down (hits={cache.hits}, misses={cache.misses})")
+            print(f"\n[proxy] shutting down ({cache.counters()})")
 
 
 def main() -> None:
