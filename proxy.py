@@ -34,63 +34,54 @@ import argparse
 import json
 import socket
 import threading
+import time
 from typing import Any, Dict, Optional, Tuple
 
-
-# ======================================================================
-# Framing (TODO 1)
-# ======================================================================
-def recv_line(sock: socket.socket, buf: bytes) -> Tuple[Optional[bytes], bytes]:
-    """Same contract as server.recv_line(). TODO 1: implement."""
-    raise NotImplementedError("TODO 1: implement framing in recv_line()")
-
-
-def send_json(sock: socket.socket, obj: Dict[str, Any]) -> None:
-    sock.sendall((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+# Framing, validation, the cache key and error responses are the same code as in
+# the server, so a request is judged identically by both - see protocol.md §10.2
+from common import cache_key, make_error, recv_line, send_json, validate_request
+from server import LRUCache
 
 
 # ======================================================================
-# Cache (TODO 2, TODO 3)
+# Cache - see protocol.md §9
 # ======================================================================
-def cache_key(request: Dict[str, Any]) -> str:
+class ProxyCache(LRUCache):
     """
-    Return a string that identifies "the same request" for caching purposes.
+    The server's LRU cache (protocol.md §9.4) plus counters for the report:
+        hits / misses - lookups that found / did not find a stored response
+        bypassed      - requests with "cache": false, which skip the cache (§9.1)
 
-    TODO 2: decide and DOCUMENT in protocol.md. Questions to answer:
-        * Are `mode` + `data` enough? Do `options` belong in the key?
-        * JSON objects are unordered: {"a":1,"b":2} and {"b":2,"a":1} are the
-          same request. Does your key treat them the same? (hint: sort_keys)
-        * Is "1+2" the same request as "1 + 2"? Must it be?
-        * Should options.cache == false bypass the cache entirely (not even
-          stored)? Where is that decided - here or in handle_client()?
-    """
-    raise NotImplementedError("TODO 2: implement cache_key()")
-
-
-class ProxyCache:
-    """
-    Stores responses keyed by cache_key().
-
-    TODO 3: implement. You may take the LRU idea from server.LRUCache or use a
-    different eviction policy, but you must be able to explain how it works
-    and why you chose it. Remember several client threads share this object.
-
-    The hit / miss counters are for YOU: print them (or expose them) so your
-    report can show the numbers next to the Wireshark capture.
+    Keys come from common.cache_key(): (mode, stripped text) - see protocol.md §9.2.
+    LRU: a hit moves the entry to the most recently used end, and when the
+    capacity is exceeded the least recently used entry is evicted.
     """
 
     def __init__(self, capacity: int):
-        self.capacity = capacity
+        super().__init__(capacity)
         self.hits = 0
         self.misses = 0
-        self._lock = threading.Lock()
-        # TODO 3: choose a data structure
+        self.bypassed = 0
 
-    def get(self, key: str) -> Optional[Dict[str, Any]]:
-        raise NotImplementedError("TODO 3: implement ProxyCache.get()")
+    def get(self, key: Any) -> Optional[Dict[str, Any]]:
+        response = super().get(key)
+        # The same lock as the cache: client threads update the counters concurrently
+        with self._lock:
+            if response is None:
+                self.misses += 1
+            else:
+                self.hits += 1
+        return response
 
-    def put(self, key: str, response: Dict[str, Any]) -> None:
-        raise NotImplementedError("TODO 3: implement ProxyCache.put()")
+    def put(self, key: Any, response: Dict[str, Any]) -> None:
+        self.set(key, response)
+
+    def count_bypass(self) -> None:
+        with self._lock:
+            self.bypassed += 1
+
+    def counters(self) -> str:
+        return f"hits={self.hits}, misses={self.misses}, bypassed={self.bypassed}"
 
 
 # ======================================================================

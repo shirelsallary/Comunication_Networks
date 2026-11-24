@@ -1,8 +1,9 @@
 # common.py
 """
-EX2 - code shared by the server and the proxy.
+EX2 - code shared by the server, the proxy and the client.
 
-Both components build responses and frame messages, and protocol.md requires
+All three frame messages (the client uses recv_line / send_json), and the server
+and the proxy also validate requests and build responses. protocol.md requires
 the same format everywhere in the system (§2, §4), so this code lives in one place.
 """
 import json
