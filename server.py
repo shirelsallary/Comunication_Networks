@@ -39,6 +39,7 @@ import ast
 import json
 import math
 import operator
+import os
 import socket
 import threading
 import time
@@ -289,7 +290,11 @@ def handle_client(conn: socket.socket, addr, cache: LRUCache) -> None:
 def serve(host: str, port: int, cache_size: int) -> None:
     cache = LRUCache(cache_size)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
-        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # On Windows SO_REUSEADDR lets a second process listen on the same port, so a
+        # forgotten instance silently steals connections; without it, a second instance
+        # fails with "address already in use". Elsewhere it only allows a quick restart.
+        if os.name != "nt":
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         srv.bind((host, port))
         srv.listen(16)
         print(f"[server] listening on {host}:{port} (cache size={cache_size})")

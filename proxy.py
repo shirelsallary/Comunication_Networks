@@ -34,6 +34,7 @@ Completed (TODO 1-5):
 """
 import argparse
 import json
+import os
 import socket
 import threading
 import time
@@ -246,7 +247,11 @@ def serve(listen_host: str, listen_port: int, server_host: str, server_port: int
           cache_size: int) -> None:
     cache = ProxyCache(cache_size)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
-        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # On Windows SO_REUSEADDR lets a second process listen on the same port, so a
+        # forgotten instance silently steals connections; without it, a second instance
+        # fails with "address already in use". Elsewhere it only allows a quick restart.
+        if os.name != "nt":
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         srv.bind((listen_host, listen_port))
         srv.listen(16)
         print(f"[proxy] {listen_host}:{listen_port} -> {server_host}:{server_port} (cache size={cache_size})")
