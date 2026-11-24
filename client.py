@@ -25,8 +25,10 @@ Given in the skeleton (adjusted where noted):
     main                                    - argument parsing and routing; `--no-cache`
                                               replaced by `--cache / --no-cache` (§3.3)
 
+Shared with the server and the proxy (common.py):
+    recv_line / send_json  framing: one message per "\\n", 64 KiB limit (§2.1-§2.3)
+
 Implemented by us:
-    recv_line()            framing: one message per "\\n", 64 KiB limit (§2.2, §2.3)
     Connection.request()   send one request, wait for its ONE response, handle errors (§8.6, §8.7)
     Connection.close()     close cleanly: shutdown() sends FIN, then close() (§8.3)
     interactive_loop()     menu over one persistent connection, with reconnect (§8.1, §8.8)
@@ -35,7 +37,10 @@ import argparse
 import json
 import socket
 import sys
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
+
+# Same framing as the server and the proxy - see protocol.md §2
+from common import recv_line, send_json
 
 # A few expressions the user can pick from the menu. The last three use
 # comparisons and and/or/not, which the server supports (protocol.md §6.3).
@@ -81,49 +86,13 @@ def build_gpt_request(prompt: str, use_cache: Optional[bool] = None) -> Dict[str
 
 
 def print_response(resp: Optional[Dict[str, Any]]) -> None:
-    """Pretty-print one response dict, or a notice when no response arrived (None)."""
+    """Pretty-print one response dict, or a notice when no valid response arrived (None)."""
     if resp is None:
-        print("!! no response (connection closed by the other side)")
+        # The reason (closed, timeout, invalid JSON) was already printed by request()
+        print("!! no valid response")
         return
     # ensure_ascii=False keeps non-English text (e.g. Hebrew GPT answers) readable
     print(json.dumps(resp, ensure_ascii=False, indent=2))
-
-
-# ======================================================================
-# Framing - see protocol.md §2
-# ======================================================================
-def recv_line(sock: socket.socket, buf: bytes) -> Tuple[Optional[bytes], bytes]:
-    """
-    Read exactly ONE message from the stream - see protocol.md §2.2.
-
-    Returns (line, leftover):
-        line     - one complete message WITHOUT the trailing b"\\n",
-                   or None if the peer closed the connection (sent FIN) first.
-        leftover - bytes already received that belong to the NEXT message;
-                   the caller must pass them back in as `buf` on the next call.
-
-    Raises ValueError if a message is longer than 65,536 bytes (protocol.md §2.3).
-
-    Why a loop and a buffer: TCP is a byte stream, so one recv() may return half a
-    message, exactly one, or one and a half. Only the "\\n" tells where a message ends.
-    """
-    #loop until we return something
-    while True:
-        if b"\n" in buf: #True if the buffer has a new line
-            line, rest = buf.split(b"\n", 1) #Split the first new line only (1 is for split once)
-            if len(line) > 65536: #checks line size and limit
-                raise ValueError("Message exceeded 64KiB limit")
-            return line, rest #returns the recieved line and the rest of the buffer
-
-        # No "\n" yet but already over the limit: this message can only be too long,
-        # so stop instead of buffering forever
-        if len(buf) > 65536: #checks buffer size and limit
-            raise ValueError("Message exceeded 64KiB limit")
-
-        chunk = sock.recv(4096) #waits for data and returns up to 4096 bytes; b"" means that the other side was closed
-        if not chunk: #if the received chunk is empty, return tuple (None, buf)
-            return None, buf
-        buf += chunk #join recieved bytes together
 
 
 # ======================================================================
@@ -163,14 +132,16 @@ class Connection:
             still open  - the response line was not valid JSON / UTF-8; the "\\n"
                           still bounded it, so the stream is in sync (§8.7)
         """
+        # Already closed: nothing can be sent, and the reason was reported when it closed
+        if self.closed:
+            return None
         try:
-            text = json.dumps(payload) #turns dictionary request to string
-            data = (text + "\n").encode("utf-8") #encode the string to bytes
-            self.sock.sendall(data) #sends all the bytes
+            send_json(self.sock, payload) # compact JSON + "\n", same framing as the server
 
             line, self.buf = recv_line(self.sock, self.buf) # save the leftover for the next call
 
-            if line is None: # if recv_line returned None
+            if line is None: # the peer sent FIN before answering
+                print("Connection closed by the other side")
                 self.close()
                 return None
             obj = json.loads(line.decode("utf-8")) #turns the encoded bytes into a dictionary and returns it
@@ -179,24 +150,24 @@ class Connection:
         # Order matters: Python uses the FIRST matching except.
         # socket.timeout is a subclass of OSError, so it must come before OSError;
         # json.JSONDecodeError is a subclass of ValueError, so it must come before ValueError.
-        except socket.timeout: #if no answer was recieved within the timeout period
+        except socket.timeout: #if no answer was received within the timeout period
             # Close, because a late answer would be mistaken for the reply to
             # the next request (requests carry no id) - protocol.md §8.6
-            print("No answer was recieved within the timeout")
+            print("No answer was received within the timeout; the client closed the connection")
             self.close()
             return None
         except OSError:
             # Connection reset / broken pipe, e.g. the server was killed - §8.5
-            print("Connection error")
+            print("Connection error; the connection is closed")
             self.close()
             return None
         except (json.JSONDecodeError, UnicodeDecodeError): #checks if the encoding is in the right format
             # The connection stays open: the bad line was still one whole message - §8.7
-            print("Server sent an invalid (non-JSON) response")
+            print("Server sent an invalid (non-JSON) response; the connection stays open")
             return None
         except ValueError:
             # Raised by recv_line: no "\n" within 64 KiB, the stream is out of sync - §2.3
-            print("Size limit exceeded")
+            print("Response exceeded the 64 KiB limit; the client closed the connection")
             self.close()
             return None
 
@@ -214,8 +185,8 @@ class Connection:
         if self.closed: # if the connection is already closed, we do nothing
             return
         try:
-            self.sock.shutdown(socket.SHUT_RDWR) # sends FIN (finish alert) to the server (can be refered as the message "I am done receiving")
-        except OSError: # if its already disconected, prevent double closing crash
+            self.sock.shutdown(socket.SHUT_RDWR) # sends FIN (finish alert) to the server (it means "I am done sending")
+        except OSError: # if it is already disconnected, prevent double closing crash
             pass
         # Outside the try: the socket is released even when shutdown() failed
         self.sock.close()
@@ -273,7 +244,7 @@ def interactive_loop(conn: Connection) -> None:
                 choice = input(MENU.format(cache=cache_text)).strip().lower() #fills {cache} in the menu text
 
                 match choice:
-                    case "1": #if option 1 was choosed, print the expressions
+                    case "1": #if option 1 was chosen, print the expressions
                         for i, expr in enumerate(PRESET_EXPRESSIONS, start=1):
                             print(f"   {i}) {expr}")
                         idx = int(input("number: ")) # read a number
