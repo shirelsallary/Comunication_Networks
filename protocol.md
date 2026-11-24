@@ -521,7 +521,8 @@ payload on both legs and `"cache": false` is guaranteed to reach the server.
 
 Every failure to obtain a valid response from the server is reported as
 `SERVER_UNAVAILABLE`: connection refused, connect timeout (3 s), read timeout (25 s), FIN or
-reset before a response, a response larger than 64 KiB, or a response that is not JSON.
+reset before a response, a response larger than 64 KiB, a response that is not JSON, or a
+response that is valid JSON but not an object.
 `error.message` states the exact cause.
 
 ### §10.6 Hit marker and timing
