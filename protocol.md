@@ -318,7 +318,7 @@ result is `true` or `false`.
 | Rule | Example | Result | Reason |
 |---|---|---|---|
 | Expression longer than 1000 characters | 1001 characters | `BAD_EXPR` | Bounds the work per request |
-| Nesting too deep for the evaluator | 3000 consecutive `-` signs | `BAD_EXPR` | A caught `RecursionError` instead of a crashed thread |
+| Nesting too deep for the evaluator | 999 consecutive `-` signs | `BAD_EXPR` | A caught `RecursionError` instead of a crashed thread |
 | Integer power whose result would exceed 4300 digits, **checked before computing** | `9**9**9` | `BAD_EXPR` | Python would compute ~370 million digits and block the thread |
 | Final integer result over 4300 digits | `10**4000 * 10**4000` | `BAD_EXPR` | Python refuses to convert such an integer to text, so `json.dumps` would fail |
 | Final result not a finite real number | `1e308*10`, `(-8)**0.5` | `BAD_EXPR` | `inf`/`nan` are not valid JSON; complex numbers cannot be serialized |
