@@ -48,8 +48,26 @@ python proxy.py --listen-port 5554 --server-port 5555 --cache-size 64
 
 # the client only changes the port
 python client.py --host 127.0.0.1 --port 5554 --mode calc --expr "sqrt(16)"
+python client.py --host 127.0.0.1 --port 5554 --mode gpt  --prompt "count to 10" --cache
 python client.py --host 127.0.0.1 --port 5554
 ```
+
+How the proxy works (details in `protocol.md` §9-§10):
+
+* It validates every request with the same code as the server (`common.py`),
+  so an invalid request gets its real error even while the server is down.
+* Cache key: `(mode, expr)` or `(mode, prompt)` after stripping surrounding
+  whitespace; `options` are not part of the key. Eviction: LRU, capacity
+  `--cache-size` (default 64).
+* `"cache": false` (the default for `gpt`) bypasses the cache: forwarded, never stored.
+* Hit: answered from the cache, the server is not contacted.
+  Miss: forwarded on a **new TCP connection** per request (the client's original
+  line), then stored if it is a success or a `BAD_EXPR` error.
+* If the server cannot give a valid response (stopped, timeout, invalid reply),
+  the client receives `SERVER_UNAVAILABLE`; cached requests are still answered.
+* Every response from the proxy carries `meta.proxy_cache` (`true` on a hit).
+  The proxy logs one line per request (`HIT` / `MISS` / `BYPASS` /
+  `SERVER_UNAVAILABLE` / `invalid`) with the `hits` / `misses` / `bypassed` counters.
 
 If your command-line interface ends up slightly different, update this README.
 
