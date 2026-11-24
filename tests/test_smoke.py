@@ -128,9 +128,8 @@ def test_malformed_json_does_not_kill_the_server():
 
 # ----------------------------------------------------------------- proxy ----
 def test_proxy_forwards_and_caches():
-    """Same request twice through the proxy: both answers must be correct.
-    Extend this with an assertion on YOUR hit marker (meta field / counters)
-    once you have decided how a proxy hit is visible to the client."""
+    """Same request twice through the proxy: both answers must be correct, and
+    the repeated one is a proxy cache hit (meta.proxy_cache, protocol.md §10.6)."""
     _start_system_once()
     with client.Connection(HOST, PROXY_PORT) as c:
         r1 = c.request(client.build_calc_request("sqrt(16)"))
@@ -139,6 +138,8 @@ def test_proxy_forwards_and_caches():
     assert r1["ok"] and abs(r1["result"] - 4) < 1e-9
     assert r2["ok"] and abs(r2["result"] - 4) < 1e-9
     assert r3["ok"] and abs(r3["result"] - 5) < 1e-9
+    assert r1["meta"]["proxy_cache"] is False
+    assert r2["meta"]["proxy_cache"] is True
 
 
 if __name__ == "__main__":
