@@ -17,7 +17,7 @@ marks what is **given** and what is a **TODO**.
 | `client.py` | request builders, preset expressions, menu text, CLI parsing | framing, `Connection.request()` / `close()`, interactive loop over one connection |
 | `proxy.py` | CLI parsing, listening socket, thread per client, shape of the per-client loop | framing, cache key, cache + eviction policy, forwarding to the server, hit / miss / server-down logic |
 | `tests/test_smoke.py` | smoke tests for server and proxy | adjust if you rename things or change the boolean representation |
-| `requirements.txt` | optional deps (real GPT calls, pytest) | - |
+| `requirements.txt` | pytest only (the code uses only the standard library) | - |
 | `.example.env` | example of the API-key variable | copy to `.env` only if you use a real API; never submit `.env` |
 | `protocol.md` | **does not exist yet** | you write it (see below) |
 
@@ -27,7 +27,7 @@ expected and which questions to answer in `protocol.md`.
 ## Quick start
 
 ```bash
-pip install -r requirements.txt          # optional (GPT API / pytest)
+pip install -r requirements.txt          # optional (pytest)
 
 # terminal 1 - server
 python server.py --host 127.0.0.1 --port 5555 --cache-size 128
@@ -35,6 +35,8 @@ python server.py --host 127.0.0.1 --port 5555 --cache-size 128
 # terminal 2 - one-shot client, directly against the server
 python client.py --host 127.0.0.1 --port 5555 --mode calc --expr "1+2*3"
 python client.py --host 127.0.0.1 --port 5555 --mode gpt  --prompt "count to 10"
+# --cache / --no-cache force options.cache; without them no options are sent
+# and the per-mode default applies (calc: cached, gpt: not cached)
 
 # interactive client (menu, many requests over ONE connection)
 python client.py --host 127.0.0.1 --port 5555
