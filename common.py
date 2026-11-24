@@ -3,12 +3,47 @@
 EX2 - code shared by the server, the proxy and the client.
 
 All three frame messages (the client uses recv_line / send_json), and the server
-and the proxy also validate requests and build responses. protocol.md requires
-the same format everywhere in the system (§2, §4), so this code lives in one place.
+and the proxy also validate requests, build responses and cache them with the
+same LRUCache. protocol.md requires the same format and cache rules everywhere
+in the system (§2, §4, §9), so this code lives in one place.
 """
+import collections
 import json
 import socket
+import threading
 from typing import Any, Dict, Optional, Tuple
+
+
+class LRUCache:
+    """
+    Minimal LRU cache built on OrderedDict - see protocol.md §9.4.
+
+    * get() moves the key to the "most recently used" end.
+    * set() inserts/updates and evicts the LEAST recently used entry
+      (the one at the front) when capacity is exceeded.
+    """
+
+    def __init__(self, capacity: int = 128):
+        self.capacity = capacity
+        self._d: "collections.OrderedDict[str, Any]" = collections.OrderedDict()
+        self._lock = threading.Lock()  # several client threads share one cache
+
+    def get(self, key: str) -> Optional[Any]:
+        with self._lock:
+            if key not in self._d:
+                return None
+            self._d.move_to_end(key)
+            return self._d[key]
+
+    def set(self, key: str, value: Any) -> None:
+        with self._lock:
+            self._d[key] = value
+            self._d.move_to_end(key)
+            if len(self._d) > self.capacity:
+                self._d.popitem(last=False)
+
+    def __len__(self) -> int:
+        return len(self._d)
 
 
 def send_json(sock: socket.socket, obj: Dict[str, Any]) -> None:

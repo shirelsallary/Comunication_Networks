@@ -13,7 +13,7 @@ be supported: mode="calc" and mode="gpt" (see your protocol.md).
 The protocol is defined in protocol.md; comments reference its sections (§).
 
 What is GIVEN (you may keep, change or rewrite it - just keep the requirements):
-    LRUCache        - small LRU cache based on OrderedDict (server-side cache).
+    LRUCache        - small LRU cache based on OrderedDict, now in common.py (shared with the proxy).
     safe_eval_expr  - safe ARITHMETIC evaluation using the `ast` module. No eval()!
     call_gpt        - stub that answers without any API key.
     handle_request  - validates a parsed request dict and dispatches to calc / gpt.
@@ -36,53 +36,17 @@ Enabling real GPT calls (optional):
 """
 import argparse
 import ast
-import collections
 import json
 import math
 import operator
 import socket
 import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-from common import cache_key, make_error, make_meta, recv_line, send_json, validate_request
+from common import LRUCache, cache_key, make_error, make_meta, recv_line, send_json, validate_request
 
-# ======================================================================
-# LRU cache (GIVEN)
-# ======================================================================
-class LRUCache:
-    """
-    Minimal LRU cache built on OrderedDict.
-
-    * get() moves the key to the "most recently used" end.
-    * set() inserts/updates and evicts the LEAST recently used entry
-      (the one at the front) when capacity is exceeded.
-
-    You will need a cache in proxy.py as well. You may reuse this class, but
-    think carefully about what the KEY should be there (see proxy.py).
-    """
-
-    def __init__(self, capacity: int = 128):
-        self.capacity = capacity
-        self._d: "collections.OrderedDict[str, Any]" = collections.OrderedDict()
-        self._lock = threading.Lock()  # several client threads share one cache
-
-    def get(self, key: str) -> Optional[Any]:
-        with self._lock:
-            if key not in self._d:
-                return None
-            self._d.move_to_end(key)
-            return self._d[key]
-
-    def set(self, key: str, value: Any) -> None:
-        with self._lock:
-            self._d[key] = value
-            self._d.move_to_end(key)
-            if len(self._d) > self.capacity:
-                self._d.popitem(last=False)
-
-    def __len__(self) -> int:
-        return len(self._d)
+# LRUCache lives in common.py: the proxy uses the same cache class.
 
 
 # ======================================================================

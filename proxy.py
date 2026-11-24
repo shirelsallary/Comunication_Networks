@@ -26,8 +26,8 @@ What is GIVEN:
     the overall shape of handle_client().
 
 Completed (TODO 1-5):
-    recv_line / send_json, cache_key  in common.py, shared with the server - §2, §9.2
-    ProxyCache           the server's LRUCache plus hits / misses / bypassed counters - §9.4
+    recv_line / send_json, cache_key, LRUCache  in common.py, shared with the server - §2, §9
+    ProxyCache           the shared LRUCache plus hits / misses / bypassed counters - §9.4
     forward_to_server()  new TCP connection per forwarded request, original line - §10.3-§10.5
     handle_request()     validate, bypass / hit / miss, SERVER_UNAVAILABLE - §10.1, §10.2
     handle_client()      persistent connection + error handling, proxy_cache and took_ms - §8, §10.6
@@ -41,8 +41,7 @@ from typing import Any, Dict, Optional, Tuple
 
 # Framing, validation, the cache key and error responses are the same code as in
 # the server, so a request is judged identically by both - see protocol.md §10.2
-from common import cache_key, make_error, recv_line, send_json, validate_request
-from server import LRUCache
+from common import LRUCache, cache_key, make_error, recv_line, send_json, validate_request
 
 
 # ======================================================================
@@ -50,7 +49,7 @@ from server import LRUCache
 # ======================================================================
 class ProxyCache(LRUCache):
     """
-    The server's LRU cache (protocol.md §9.4) plus counters for the report:
+    The shared LRU cache, the same as the server's (protocol.md §9.4), plus counters for the report:
         hits / misses - lookups that found / did not find a stored response
         bypassed      - requests with "cache": false, which skip the cache (§9.1)
 
