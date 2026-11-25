@@ -15,7 +15,7 @@ The protocol is defined in protocol.md; comments reference its sections (§).
 What is GIVEN (you may keep, change or rewrite it - just keep the requirements):
     LRUCache        - small LRU cache based on OrderedDict, now in common.py (shared with the proxy).
     safe_eval_expr  - safe ARITHMETIC evaluation using the `ast` module. No eval()!
-    call_gpt        - stub that answers without any API key.
+    call_gpt        - stub that answers without any API key (now the fallback).
     handle_request  - validates a parsed request dict and dispatches to calc / gpt.
     serve           - accept loop, one thread per client connection.
 
@@ -25,14 +25,11 @@ Completed (TODO 1-4):
     _eval_node()           comparisons and and / or / not - §6.3
     safe_eval_expr()       results without conversion (booleans stay JSON true / false), limits - §6.2, §6.5
     handle_request()       validation, error codes, server cache - §3.4, §5, §9
+    call_gpt()             optional real model (Groq) with the stub as fallback - §7 (TODO 5)
 
-Still open:
-    TODO 5  (optional) call_gpt() - talk to a real model. Key goes in .env, NEVER in git/ZIP.
-
-Enabling real GPT calls (optional):
+Enabling the real model (optional):
     1. pip install -r requirements.txt
-    2. copy .example.env to .env and put your key there
-    3. implement the real call inside call_gpt()
+    2. copy .example.env to .env and put your GROQ_API_KEY there (.env is NEVER in git/ZIP)
 """
 import argparse
 import ast
@@ -165,16 +162,39 @@ def safe_eval_expr(expr: str):
 # ======================================================================
 # GPT component (GIVEN stub, optional real implementation)
 # ======================================================================
+# Both packages are optional: without them the server still runs with the stub - see protocol.md §7
+try:
+    from dotenv import load_dotenv
+    load_dotenv()  # reads GROQ_API_KEY from .env; the key is never hard-coded or submitted
+except ImportError:
+    pass
+try:
+    from groq import Groq
+except ImportError:
+    Groq = None
+
+GROQ_MODEL = "llama-3.1-8b-instant"
+
+
 def call_gpt(prompt: str) -> str:
     """
-    Default fallback so the whole system runs WITHOUT an API key.
-
-    TODO 5 (optional): replace the body with a real call to a model of your
-    choice. Load the key from .env (python-dotenv) - never hard-code it and
-    never put .env in the ZIP. Keep the stub as a fallback when no key is set,
-    and never send personal data to an external service.
+    Answer `prompt` with a real Groq model when GROQ_API_KEY is set and the groq
+    package is installed; otherwise use the stub, so the whole system runs
+    WITHOUT an API key (protocol.md §7). Only the prompt is sent.
+    Any failure raises, and handle_request turns it into GPT_ERROR.
     """
-    return f"[GPT-STUB] Received a prompt of {len(prompt)} characters."
+    key = os.environ.get("GROQ_API_KEY")
+    if not key or Groq is None:
+        return f"[GPT-STUB] Received a prompt of {len(prompt)} characters."
+    # 20 s timeout and no retries, so the server answers before the proxy's 25 s
+    # read timeout - see protocol.md §8.9. max_tokens keeps answers far below 64 KiB (§7).
+    client = Groq(api_key=key, timeout=20, max_retries=0)
+    completion = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        max_tokens=512,
+    )
+    return completion.choices[0].message.content
 
 
 # ======================================================================

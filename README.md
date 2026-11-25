@@ -17,8 +17,8 @@ marks what is **given** and what is a **TODO**.
 | `client.py` | request builders, preset expressions, menu text, CLI parsing | framing, `Connection.request()` / `close()`, interactive loop over one connection |
 | `proxy.py` | CLI parsing, listening socket, thread per client, shape of the per-client loop | framing, cache key, cache + eviction policy, forwarding to the server, hit / miss / server-down logic |
 | `tests/test_smoke.py` | smoke tests for server and proxy | adjust if you rename things or change the boolean representation |
-| `requirements.txt` | pytest only (the code uses only the standard library) | - |
-| `.example.env` | example of the API-key variable | copy to `.env` only if you use a real API; never submit `.env` |
+| `requirements.txt` | optional deps: `groq` + `python-dotenv` (real model), pytest | - |
+| `.example.env` | example of the `GROQ_API_KEY` variable | copy to `.env` only if you use the real model; never submit `.env` |
 | `protocol.md` | **does not exist yet** | you write it (see below) |
 
 Search for `TODO` in the code - each one has a short explanation of what is
@@ -27,7 +27,7 @@ expected and which questions to answer in `protocol.md`.
 ## Quick start
 
 ```bash
-pip install -r requirements.txt          # optional (pytest)
+pip install -r requirements.txt          # optional (real model / pytest)
 
 # terminal 1 - server
 python server.py --host 127.0.0.1 --port 5555 --cache-size 128
@@ -70,6 +70,19 @@ How the proxy works (details in `protocol.md` §9-§10):
 * Every response from the proxy carries `meta.proxy_cache` (`true` on a hit).
   The proxy logs one line per request (`HIT` / `MISS` / `BYPASS` /
   `SERVER_UNAVAILABLE` / `invalid`) with the `hits` / `misses` / `bypassed` counters.
+
+### Enabling a real model (Groq)
+
+Without a key, `gpt` requests are answered by the built-in stub. To use a real
+model (`llama-3.1-8b-instant` on Groq):
+
+1. `pip install -r requirements.txt`
+2. Copy `.example.env` to `.env` (in the project root) and replace the placeholder:
+   `GROQ_API_KEY=<your key>` (no quotes).
+3. Restart the server. Only the prompt is sent; any failure of the call
+   (bad key, timeout of 20 s) returns `GPT_ERROR`.
+
+**Never commit or submit `.env`** - it is in `.gitignore`; only `.example.env` goes in the ZIP.
 
 If your command-line interface ends up slightly different, update this README.
 

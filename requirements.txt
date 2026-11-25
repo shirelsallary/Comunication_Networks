@@ -1,5 +1,7 @@
-# The client, proxy and server use only the Python standard library.
-# The GPT component is the built-in stub, so no API package is needed.
+# Optional: only needed for real model calls in server.call_gpt() (Groq).
+# Without them, or without GROQ_API_KEY, the server answers gpt requests with the stub.
+groq>=1.0
+python-dotenv>=1.0.1
 
 # Optional: for running tests/test_smoke.py with `python -m pytest tests/`
 pytest>=8.0
