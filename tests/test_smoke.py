@@ -8,9 +8,8 @@ Run (from the project root):
 or
     python tests/test_smoke.py
 
-The tests FAIL until you complete the TODOs - use them as a checklist, not as
-proof of correctness (they do not cover everything the assignment asks for).
-If you renamed things in client.py, update the imports / calls below.
+All tests pass. They are a checklist, not proof of correctness (they do not
+cover everything the assignment asks for).
 Scenario 3 (server shut down, proxy still answers from cache) is not covered
 here - it needs a real shutdown; do it by hand and capture it with Wireshark.
 """
@@ -84,8 +83,8 @@ def test_many_requests_on_one_connection():
 
 
 def test_boolean_expression():
-    """Needs server TODO 3 + TODO 4. Adjust the assertion if your protocol.md
-    represents booleans differently (and say so in protocol.md)."""
+    """Comparisons and and / or / not; logical results are JSON booleans
+    (protocol.md §6.2, §6.3)."""
     _start_system_once()
     with client.Connection(HOST, SERVER_PORT) as c:
         r = c.request(client.build_calc_request("1 < 2 and not (3 > 4)"))

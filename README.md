@@ -5,9 +5,8 @@ application-layer protocol **that you define** (`protocol.md`). Everything
 below the socket is a byte stream; message structure, framing, error format
 and caching semantics are your responsibility.
 
-This directory is the starting skeleton. You may change its structure or
-rewrite parts, as long as the assignment requirements are met. Every file
-marks what is **given** and what is a **TODO**.
+This directory is the completed project, built on the course skeleton. Every
+file's docstring lists what was **given** and what was **completed**.
 
 ## Files
 
@@ -19,10 +18,9 @@ marks what is **given** and what is a **TODO**.
 | `tests/test_smoke.py` | smoke tests for server and proxy | adjust if you rename things or change the boolean representation |
 | `requirements.txt` | optional deps: `groq` + `python-dotenv` (real model), pytest | - |
 | `.example.env` | example of the `GROQ_API_KEY` variable | copy to `.env` only if you use the real model; never submit `.env` |
-| `protocol.md` | **does not exist yet** | you write it (see below) |
+| `protocol.md` | - | the full protocol specification (written by us) |
 
-Search for `TODO` in the code - each one has a short explanation of what is
-expected and which questions to answer in `protocol.md`.
+Code comments reference the `protocol.md` sections (§) that explain each decision.
 
 ## Quick start
 
@@ -92,7 +90,7 @@ If your command-line interface ends up slightly different, update this README.
 python -m pytest tests/        # or: python tests/test_smoke.py
 ```
 
-The tests fail until the TODOs are done. They are a checklist, not a proof:
+All tests pass. They are a checklist, not a proof:
 the assignment asks for more than they check (e.g. scenario 3, where the
 server is shut down and the proxy keeps answering from its cache, must be
 done by hand and captured with Wireshark).
