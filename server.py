@@ -173,7 +173,7 @@ try:
 except ImportError:
     Groq = None
 
-GROQ_MODEL = "llama-3.1-8b-instant"
+GROQ_MODEL = "openai/gpt-oss-20b"
 
 
 def call_gpt(prompt: str) -> str:
@@ -193,6 +193,9 @@ def call_gpt(prompt: str) -> str:
         model=GROQ_MODEL,
         messages=[{"role": "user", "content": prompt}],
         max_tokens=512,
+        # A reasoning model: its hidden reasoning also counts toward max_tokens, so a
+        # low effort leaves room for a complete answer instead of a cut-off one
+        reasoning_effort="low",
     )
     return completion.choices[0].message.content
 

@@ -74,7 +74,7 @@ How the proxy works (details in `protocol.md` §9-§10):
 ### Enabling a real model (Groq)
 
 Without a key, `gpt` requests are answered by the built-in stub. To use a real
-model (`llama-3.1-8b-instant` on Groq):
+model (`openai/gpt-oss-20b` on Groq):
 
 1. `pip install -r requirements.txt`
 2. Copy `.example.env` to `.env` (in the project root) and replace the placeholder:
