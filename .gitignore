@@ -1,6 +1,9 @@
 # Secrets: only .example.env may be committed
 .env
 
+# Word lock files (created while a .docx is open)
+~$*
+
 # Virtual environment
 .venv/
 

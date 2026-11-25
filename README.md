@@ -10,15 +10,16 @@ file's docstring lists what was **given** and what was **completed**.
 
 ## Files
 
-| File | Given | You complete |
-|------|-------|--------------|
-| `server.py` | LRU cache, safe arithmetic evaluator (`ast`, no `eval`), GPT stub, request dispatch, accept loop | framing (`recv_line`), persistent connection + error handling, comparisons and `and/or/not` in the evaluator, how booleans are returned, optional real GPT call |
-| `client.py` | request builders, preset expressions, menu text, CLI parsing | framing, `Connection.request()` / `close()`, interactive loop over one connection |
-| `proxy.py` | CLI parsing, listening socket, thread per client, shape of the per-client loop | framing, cache key, cache + eviction policy, forwarding to the server, hit / miss / server-down logic |
-| `tests/test_smoke.py` | smoke tests for server and proxy | adjust if you rename things or change the boolean representation |
-| `requirements.txt` | optional deps: `groq` + `python-dotenv` (real model), pytest | - |
-| `.example.env` | example of the `GROQ_API_KEY` variable | copy to `.env` only if you use the real model; never submit `.env` |
-| `protocol.md` | - | the full protocol specification (written by us) |
+| File | Given | Completed / changed by us |
+|------|-------|---------------------------|
+| `server.py` | safe arithmetic evaluator (`ast`, no `eval`), GPT stub, request dispatch, accept loop | persistent connection + error handling, comparisons and `and/or/not` (booleans as JSON `true`/`false`), validation and error codes, input limits, optional Groq model with the stub as fallback |
+| `client.py` | request builders, preset expressions, menu text, CLI parsing | `Connection.request()` / `close()` with timeout and error handling, interactive loop over one connection (asks before reconnecting), `options` sent only when chosen (`--cache` / `--no-cache`, menu toggle) |
+| `proxy.py` | CLI parsing, listening socket, thread per client, shape of the per-client loop | LRU cache with counters, hit / miss / bypass logic, forwarding on a new connection per request, `SERVER_UNAVAILABLE`, `meta.proxy_cache` |
+| `common.py` | - (new; `send_json` and `LRUCache` came from the skeleton) | code shared by all components: framing, request validation, cache key, error responses, `LRUCache` |
+| `tests/test_smoke.py` | smoke tests for server and proxy | assertion on the proxy hit marker (`proxy_cache`) |
+| `requirements.txt` | optional deps for a real GPT call, pytest | `groq` + `python-dotenv` (optional real model), pytest |
+| `.example.env` | example API-key variable | `GROQ_API_KEY`; copy to `.env` only for the real model, never submit `.env` |
+| `protocol.md` | - | the full protocol specification |
 
 Code comments reference the `protocol.md` sections (§) that explain each decision.
 
